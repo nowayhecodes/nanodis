@@ -5,8 +5,8 @@ with open(os.path.join(os.path.dirname(__file__), 'README.md')) as f:
     readme = f.read()
 
 setup(
-    name='Nanodis',
-    version=__import__('Nanodis').__version__,
+    name='nanodis',
+    version=__import__('nanodis').__version__,
     description='A Python miniature Redis-like db',
     author='Gustavo Cavalcante',
     author_email='nowayhecodes@gmail.com',

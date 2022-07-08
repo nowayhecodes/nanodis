@@ -218,3 +218,219 @@ KV = 0
 HASH = 1
 QUEUE = 2
 SET = 3
+
+
+class QueueServer(object):
+    def __init__(self, host='127.0.0.1',
+                 port=33737, max_clients=1024, use_gevent=True) -> None:
+        self._host = host
+        self._port = port
+        self._max_clients = max_clients
+
+        if use_gevent:
+            if Pool is None or StreamServer is None:
+                raise Exception('gevent not installed. Please install gevent '
+                                'or instantiate QueueServer with '
+                                'use_gevent=False')
+
+            self._pool = Pool(max_clients)
+            self._server = StreamServer(
+                (self._host, self._port),
+                self.connection_handler,
+                spawn=self._pool
+            )
+
+        else:
+            self._server = ThreadedStreamServer(
+                (self._host, self._port),
+                self.connection_handler)
+
+        self._commands = self.get_commands()
+        self._protocol = ProtocolHandler()
+
+        self._kv = {}
+        self._schedule = []
+        self._expiry = []
+        self._expiry_map = {}
+
+        self._active_connections = 0
+        self._commands_processed = 0
+        self._command_errors = 0
+        self._connections = 0
+
+    def check_expired(self, key, ts=None):
+        ts = ts or time.time()
+        return key in self._expiry_map and ts > self._expiry_map[key]
+
+    def unexpire(self, key):
+        self._expiry_map.pop(key, None)
+
+    def clean_expired(self, ts=None):
+        ts = ts or time.time()
+        n = 0
+        while self._expiry:
+            expires, key = heapq.heappop(self._expiry)
+            if expires > ts:
+                heapq.heappush(self._expiry, (expires, key))
+                break
+
+            if self._expiry_map.get(key) == expires:
+                del self._expiry_map[key]
+                del self._kv[key]
+                n += 1
+        return n
+
+    def enforce_datatype(data_type, set_missing=True, subtype=None):
+        def decorator(method):
+            @wraps(method)
+            def inner(self, key, *args, **kwargs):
+                self.check_datatype(data_type, key, set_missing, subtype)
+                return method(self, key, *args, **kwargs)
+            return inner
+        return decorator
+
+    def check_datatype(self, data_type, key, set_missing=True, subtype=None):
+        if key in self._kv and self.check_expired(key):
+            del self._kv[key]
+
+        if key in self._kv:
+            value = self._kv[key]
+            if value.data_type != data_type:
+                raise CmdError('Operation agains wrong key type.')
+            if subtype is not None and not isinstance(value.value, subtype):
+                raise CmdError('Operation agains wrong key type.')
+        elif set_missing:
+            if data_type == HASH:
+                value = {}
+            elif data_type == QUEUE:
+                value = deque()
+            elif data_type == SET:
+                value = set()
+            elif data_type == KV:
+                value = ''
+            self._kv[key] = Value(data_type, value)
+
+    def _get_state(self):
+        return {'kv': self._kv, 'schedule': self._schedule}
+
+    def _set_state(self, state, merge=False):
+        if not merge:
+            self._kv = state['kv']
+            self._schedule = state['schedule']
+        else:
+            def merge(original, updates):
+                original.update(updates)
+                return original
+            self._kv = merge(state['kv'], self._kv)
+            self._schedule = state['schedule']
+
+    def save_to_disk(self, filename):
+        with open(filename, 'wb') as f:
+            pickle.dump(self._get_state(), f, pickle.HIGHEST_PROTOCOL)
+        return True
+
+    def load_from_disk(self, filename, merge=False):
+        if not os.path.exists(filename):
+            return False
+        with open(filename, 'rb') as f:
+            state = pickle.load(f)
+        self._set_state(state, merge=merge)
+        return True
+
+    def merge_from_disk(self, filename):
+        return self.load_from_disk(filename, merge=True)
+
+    def get_commands(self):
+        timestamp_re = (r'(?P<timestamp>\d{4}-\d{2}-\d{2} '
+                        '\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
+        return dict({
+            # Queue cmds
+            (b'LPUSH', self.lpush),
+            (b'RPUSH', self.rpush),
+            (b'LPOP', self.lpop),
+            (b'RPOP', self.rpop),
+            (b'LREM', self.lrem),
+            (b'LLEN', self.llen),
+            (b'LINDEX', self.lindex),
+            (b'LRANGE', self.lrange),
+            (b'LSET', self.lset),
+            (b'LTRIM', self.ltrim),
+            (b'RPOPLPUSH', self.rpoplplush),
+            (b'LFLUSH', self.lflush),
+
+            # KV cmds
+            (b'APPEND', self.kv_append),
+            (b'DECR', self.kv_decr),
+            (b'DECRBY', self.kv_decrby),
+            (b'DELETE', self.kv_delete),
+            (b'EXISTS', self.kv_exists),
+            (b'GET', self.kv_get),
+            (b'GETSET', self.kv_getset),
+            (b'INCR', self.kv_incr),
+            (b'INCRBY', self.kv_incrby),
+            (b'MDELETE', self.kv_mdelete),
+            (b'MGET', self.kv_mget),
+            (b'MPOP', self.kv_mpop),
+            (b'MSET', self.kv_mset),
+            (b'MSETEX', self.kv_msetex),
+            (b'POP', self.kv_pop),
+            (b'SET', self.kv_set),
+            (b'SETNX', self.kv_setnx),
+            (b'SETEX', self.kv_setex),
+            (b'LEN', self.kv_len),
+            (b'FLUSH', self.kv_flush),
+
+            # Hash cmds.
+            (b'HDEL', self.hdel),
+            (b'HEXISTS', self.hexists),
+            (b'HGET', self.hget),
+            (b'HGETALL', self.hgetall),
+            (b'HINCRBY', self.hincrby),
+            (b'HKEYS', self.hkeys),
+            (b'HLEN', self.hlen),
+            (b'HMGET', self.hmget),
+            (b'HMSET', self.hmset),
+            (b'HSET', self.hset),
+            (b'HSETNX', self.hsetnx),
+            (b'HVALS', self.hvals),
+
+            # Set cmd.
+            (b'SADD', self.sadd),
+            (b'SCARD', self.scard),
+            (b'SDIFF', self.sdiff),
+            (b'SDIFFSTORE', self.sdiffstore),
+            (b'SINTER', self.sinter),
+            (b'SINTERSTORE', self.sinterstore),
+            (b'SISMEMBER', self.sismember),
+            (b'SMEMBERS', self.smembers),
+            (b'SPOP', self.spop),
+            (b'SREM', self.srem),
+            (b'SUNION', self.sunion),
+            (b'SUNIONSTORE', self.sunionstore),
+
+            # Schedule cmd.
+            (b'ADD', self.schedule_add),
+            (b'READ', self.schedule_read),
+            (b'FLUSH_SCHEDULE', self.schedule_flush),
+            (b'LENGTH_SCHEDULE', self.schedule_length),
+
+            # Misc.
+            (b'EXPIRE', self.expire),
+            (b'INFO', self.info),
+            (b'FLUSHALL', self.flush_all),
+            (b'SAVE', self.save_to_disk),
+            (b'RESTORE', self.restore_from_disk),
+            (b'MERGE', self.merge_from_disk),
+            (b'QUIT', self.client_quit),
+            (b'SHUTDOWN', self.shutdown),
+        })
+
+    def expire(self, key, seconds):
+        eta = time.time() + seconds
+        self._expiry_map[key] = eta
+        heapq.heappush(self._expiry, (eta, key))
+
+    @enforce_datatype(QUEUE)
+    def lpush(self, key, *values):
+        self._kv[key].value.extendleft(values)
+        return len(values)
