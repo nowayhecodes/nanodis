@@ -6,7 +6,7 @@ try:
     from gevent.pool import Pool
     from gevent.server import StreamServer
     from gevent.thread import get_ident
-    from numba import njit()
+    from numba import njit
     HAVE_GEVENT = True
 except ImportError:
     import socket
@@ -112,7 +112,7 @@ class ProtocolHandler(object):
             b'$': self.handle_string,
             b'^': self.handle_unicode,
             b'@': self.handle_json,
-            b'*': self.handle_array,
+            b'*': self.handle_list,
             b'%': self.handle_dict,
             b'&': self.handle_set,
         }
@@ -512,3 +512,21 @@ class QueueServer(object):
         qlen = len(self._kv[key].value)
         self._kv[key].value.clear()
         return qlen
+
+    def kv_append(self, key, value):
+        if key not in self._kv:
+            self.kv_set(key, value)
+        else:
+            kv_value = self._kv[key]
+            if kv_value.data_type == QUEUE:
+                if isinstance(value, list):
+                    kv_value.value.extend(value)
+                else:
+                    kv_value.value.append(value)
+            else:
+                try:
+                    kv_value = Value(kv_value.data_type,
+                                     kv_value.value + value)
+                except:
+                    raise CmdError('Incompatible data types')
+        return self._kv[key].value
