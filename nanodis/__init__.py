@@ -6,6 +6,7 @@ try:
     from gevent.pool import Pool
     from gevent.server import StreamServer
     from gevent.thread import get_ident
+    from numba import njit()
     HAVE_GEVENT = True
 except ImportError:
     import socket
@@ -26,7 +27,7 @@ import os
 import pickle
 import sys
 import time
-from turtle import st
+
 
 from .exceptions import (ClientQuit, Shutdown,
                          ServerDisconnect, ServerError, ServerInternalError)
@@ -46,6 +47,7 @@ __version__ = '0.1.0'
 logger = logging.getLogger(__name__)
 
 
+@njit(parallel=True)
 class ThreadedStreamServer(object):
     def __init__(self, address, handler) -> None:
         self.address = address
@@ -100,6 +102,7 @@ def decode(s):
 Error = namedtuple('Error', ('message', ))
 
 
+@njit(parallel=True)
 class ProtocolHandler(object):
     def __init__(self) -> None:
         self.handlers = {
@@ -220,6 +223,7 @@ QUEUE = 2
 SET = 3
 
 
+@njit(parallel=True)
 class QueueServer(object):
     def __init__(self, host='127.0.0.1',
                  port=33737, max_clients=1024, use_gevent=True) -> None:
@@ -355,7 +359,7 @@ class QueueServer(object):
             (b'LRANGE', self.lrange),
             (b'LSET', self.lset),
             (b'LTRIM', self.ltrim),
-            (b'RPOPLPUSH', self.rpoplplush),
+            (b'RPOPLPUSH', self.rpopl_plush),
             (b'LFLUSH', self.lflush),
 
             # KV cmds
@@ -432,5 +436,79 @@ class QueueServer(object):
 
     @enforce_datatype(QUEUE)
     def lpush(self, key, *values):
-        self._kv[key].value.extendleft(values)
+        self._kv[key].value.extend_left(values)
         return len(values)
+
+    @enforce_datatype(QUEUE)
+    def rpush(self, key, *values):
+        self._kv[key].value.extend(values)
+        return len(values)
+
+    @enforce_datatype(QUEUE)
+    def lpop(self, key):
+        try:
+            return self._kv[key].value.popleft()
+        except IndexError:
+            pass
+
+    @enforce_datatype(QUEUE)
+    def rpop(self, key):
+        try:
+            return self._kv[key].value.pop()
+        except IndexError:
+            pass
+
+    @enforce_datatype(QUEUE)
+    def lrem(self, key, value):
+        try:
+            self._kv[key].value.remove(value)
+        except ValueError:
+            return 0
+        else:
+            return 1
+
+    @enforce_datatype(QUEUE)
+    def llen(self, key):
+        return len(self._kv[key].value)
+
+    @enforce_datatype(QUEUE)
+    def lindex(self, key, idx):
+        try:
+            return self._kv[key].value[idx]
+        except IndexError:
+            pass
+
+    @enforce_datatype(QUEUE)
+    def lset(self, key, idx, value):
+        try:
+            self._kv[key].value[idx] = value
+        except IndexError:
+            return 0
+        else:
+            return 1
+
+    @enforce_datatype(QUEUE)
+    def ltrim(self, key, begin, end):
+        trimmed = list(self._kv[key].value)[begin:end]
+        self._kv[key] = Value(QUEUE, deque(trimmed))
+        return len(trimmed)
+
+    @enforce_datatype(QUEUE)
+    def rpop_lpush(self, src, dest):
+        self.check_datatype(QUEUE, dest, set_missing=True)
+        try:
+            self._kv[dest].value.append_left(self._kv[src].value.pop())
+        except IndexError:
+            return 0
+        else:
+            return 1
+
+    @enforce_datatype(QUEUE)
+    def lrange(self, key, begin, end=None):
+        return list(self._kv[key].value)[begin:end]
+
+    @enforce_datatype(QUEUE)
+    def lflush(self, key):
+        qlen = len(self._kv[key].value)
+        self._kv[key].value.clear()
+        return qlen
