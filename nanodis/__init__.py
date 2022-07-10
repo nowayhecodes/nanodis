@@ -29,6 +29,8 @@ from symtable import Symbol
 import sys
 import time
 
+from numpy import isin
+
 
 from .exceptions import (ClientQuit, Shutdown,
                          ServerDisconnect, ServerError, ServerInternalError)
@@ -592,3 +594,86 @@ class QueueServer(object):
             else:
                 acc.append(None)
         return acc
+
+    def kv_mpop(self, *keys):
+        acc = []
+        for key in keys:
+            if key in self._kv and not self.check_expired(key):
+                acc.append(self._kv.pop(key).value)
+            else:
+                acc.append(None)
+        return acc
+
+    def kv_mset(self, __data=None, **kw):
+        n = 0
+        data = {}
+
+        if __data is not None:
+            data.update(__data)
+        if kw is not None:
+            data.update(kw)
+
+        for key in data:
+            self.unexpire(key)
+            self._kv[key] = Value(KV, data[key])
+            n += 1
+        return n
+
+    def kv_msetex(self, data, expires):
+        self.kv_mset(data)
+        for key in data:
+            self.expire(key, expires)
+
+    def kv_pop(self, key):
+        if key in self._kv and not self.check_expired(key):
+            return self._kv.pop(key).value
+
+    def kv_set(self, key, value):
+        if isinstance(value, dict):
+            data_type = HASH
+        elif isinstance(value, list):
+            data_type = QUEUE
+            value = deque(value)
+        elif isinstance(value, set):
+            data_type = SET
+        else:
+            data_type = KV
+
+        self.unexpire(key)
+        self._kv[key] = Value(data_type, value)
+        return 1
+
+    def kv_setnx(self, key, value):
+        if key in self._kv and not self.check_expired(key):
+            return 0
+        else:
+            self.unexpire(key)
+            self._kv[key] = Value(KV, value)
+            return 1
+
+    def kv_setex(self, key, value, expires):
+        self.kv_set(key, value)
+        self.expire(key, expires)
+        return 1
+
+    def kv_len(self):
+        return len(self._kv)
+
+    def kv_flush(self):
+        kvlen = self.kv_len()
+        self._kv.clear()
+        self._expiry = []
+        self._expiry_map = {}
+        return kvlen
+
+    def _decode_timestamp(self, timestamp):
+        timestamp = decode(timestamp)
+        fmt = '%Y-%m-%d %H:%M:%S'
+
+        if '.' in timestamp:
+            fmt = fmt + '.%f'
+
+        try:
+            return datetime.datetime.strptime(timestamp, fmt)
+        except ValueError:
+            raise CmdError('Timestamp must be formatted Y-m-d H:M:S')
