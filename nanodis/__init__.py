@@ -25,6 +25,7 @@ import logging
 import optparse
 import os
 import pickle
+from symtable import Symbol
 import sys
 import time
 
@@ -371,7 +372,7 @@ class QueueServer(object):
             (b'GET', self.kv_get),
             (b'GETSET', self.kv_getset),
             (b'INCR', self.kv_incr),
-            (b'INCRBY', self.kv_incrby),
+            (b'INCRBY', self.kv_incr_by),
             (b'MDELETE', self.kv_mdelete),
             (b'MGET', self.kv_mget),
             (b'MPOP', self.kv_mpop),
@@ -530,3 +531,64 @@ class QueueServer(object):
                 except:
                     raise CmdError('Incompatible data types')
         return self._kv[key].value
+
+    def _kv_incr(self, key, n):
+        if key in self._kv:
+            value = self._kv[key].value + n
+        else:
+            value = n
+        self._kv[key] = Value(KV, value)
+        return value
+
+    @enforce_datatype(KV, set_missing=False, subtype=(float, int))
+    def kv_decr(self, key):
+        return self._kv_incr(key, -1)
+
+    def kv_delete(self, key):
+        if key in self._kv:
+            del self._kv[key]
+            return 1
+        return 0
+
+    def kv_exists(self, key):
+        return 1 if key in self._kv and not self.check_expired(key) else 0
+
+    def kv_get(self, key):
+        if key in self._kv and not self.check_expired(key):
+            return self._kv[key].value
+
+    def kv_getset(self, key, value):
+        if key in self._kv and not self.check_expired(key):
+            original = self._kv[key].value
+        else:
+            original = None
+        self._kv[key] = Value(KV, value)
+        return original
+
+    @enforce_datatype(KV, set_missing=False, subtype=(float, int))
+    def kv_incr(self, key):
+        return self._kv_incr(key, 1)
+
+    @enforce_datatype(KV, set_missing=False, subtype=(float, int))
+    def kv_incr_by(self, key, n):
+        return self._kv_incr(key, n)
+
+    def kv_mdelete(self, *keys):
+        n = 0
+        for key in keys:
+            try:
+                del self._kv[key]
+            except KeyError:
+                pass
+            else:
+                n += 1
+        return n
+
+    def kv_mget(self, *keys):
+        acc = []
+        for key in keys:
+            if key in self._kv and not self.check_expired(key):
+                acc.append(self._kv[key].value)
+            else:
+                acc.append(None)
+        return acc
