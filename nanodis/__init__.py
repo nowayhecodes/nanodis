@@ -27,6 +27,7 @@ import os
 import pickle
 import sys
 import time
+from tkinter.messagebox import RETRY
 
 
 from .exceptions import (ClientQuit, Shutdown,
@@ -744,3 +745,25 @@ class QueueServer(object):
     def sadd(self, key, *members):
         self._kv[key].value.update(members)
         return len(self._kv[key].value)
+
+    @enforce_datatype(SET)
+    def scard(self, key):
+        return len(self._kv[key].value)
+
+    @enforce_datatype(SET)
+    def sdiff(self, key, *keys):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_datatype(SET, key)
+            src -= self._kv[key].value
+        return list(src)
+
+    @enforce_datatype(SET)
+    def sdiffstore(self, dest, key, *keys):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_datatype(SET, key)
+            src -= self._kv[key].value
+        self.check_datatype(SET, dest)
+        self._kv[dest] = Value(SET, src)
+        return len(src)
