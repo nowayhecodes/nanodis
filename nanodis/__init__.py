@@ -28,6 +28,7 @@ import pickle
 import sys
 import time
 from tkinter.messagebox import RETRY
+from typing import Set
 
 
 from .exceptions import (ClientQuit, Shutdown,
@@ -404,8 +405,8 @@ class QueueServer(object):
             (b'SCARD', self.scard),
             (b'SDIFF', self.sdiff),
             (b'SDIFFSTORE', self.sdiffstore),
-            (b'SINTER', self.sinter),
-            (b'SINTERSTORE', self.sinterstore),
+            (b'SINTERSEC', self.sintersec),
+            (b'SINTERSTORE', self.sintersec_store),
             (b'SISMEMBER', self.sismember),
             (b'SMEMBERS', self.smembers),
             (b'SPOP', self.spop),
@@ -767,3 +768,29 @@ class QueueServer(object):
         self.check_datatype(SET, dest)
         self._kv[dest] = Value(SET, src)
         return len(src)
+
+    @enforce_datatype(SET)
+    def sintersec(self, key, *keys):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_expired(SET, key)
+            src &= self._kv[key].value
+        return list(src)
+
+    @enforce_datatype(SET)
+    def sintersec_store(self, dest, key, *keys):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_expired(SET, key)
+            src &= self._kv[key].value
+        self.check_datatype(SET, dest)
+        self._kv[dest] = Value(SET, src)
+        return len(src)
+
+    @enforce_datatype(SET)
+    def sismenber(self, key, member):
+        return 1 if member in self._kv[key].value else 0
+
+    @enforce_datatype(SET)
+    def smembers(self, key) -> Set(Value):
+        return self._kv[key].value
