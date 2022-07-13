@@ -28,7 +28,7 @@ import pickle
 import sys
 import time
 from tkinter.messagebox import RETRY
-from typing import Set
+from typing import List, Set
 
 
 from .exceptions import (ClientQuit, Shutdown,
@@ -410,9 +410,9 @@ class QueueServer(object):
             (b'SISMEMBER', self.sismember),
             (b'SMEMBERS', self.smembers),
             (b'SPOP', self.spop),
-            (b'SREM', self.srem),
+            (b'SREM', self.sremove),
             (b'SUNION', self.sunion),
-            (b'SUNIONSTORE', self.sunionstore),
+            (b'SUNIONSTORE', self.sunion_store),
 
             # Schedule cmd.
             (b'ADD', self.schedule_add),
@@ -788,9 +788,51 @@ class QueueServer(object):
         return len(src)
 
     @enforce_datatype(SET)
-    def sismenber(self, key, member):
+    def sismenber(self, key, member) -> bool:
         return 1 if member in self._kv[key].value else 0
 
     @enforce_datatype(SET)
     def smembers(self, key) -> Set(Value):
         return self._kv[key].value
+
+    @enforce_datatype(SET)
+    def spop(self, key, n=1):
+        accum = []
+        for _ in range(n):
+            try:
+                accum.append(self._kv[key].value.pop())
+            except KeyError:
+                break
+        return accum
+
+    @enforce_datatype(SET)
+    def sremove(self, key, *members):
+        count = 0
+        for member in members:
+            try:
+                self._kv[key].value.remove(member)
+            except KeyError:
+                pass
+            else:
+                count += 1
+        return count
+
+    @enforce_datatype(SET)
+    def sunion(self, key, *keys) -> List(Set):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_datatype(SET, key)
+            src |= self._kv[key].value
+        return list(src)
+
+    @enforce_datatype(SET)
+    def sunion_store(self, dest, key, *keys):
+        src = set(self._kv[key].value)
+        for key in keys:
+            self.check_datatype(SET, key)
+            src |= self._kv[key].value
+        self.check_datatype(SET, dest)
+        self._kv[dest] =Value(SET, src)
+        return len(src)
+
+    
