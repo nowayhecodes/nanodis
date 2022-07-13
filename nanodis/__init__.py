@@ -28,7 +28,6 @@ import os
 import pickle
 import sys
 import time
-from tkinter.messagebox import RETRY
 from typing import List, Set
 
 
@@ -1154,3 +1153,28 @@ class Client(object):
 
     def __len__(self):
         return self.length()
+
+
+def get_opt_parser():
+    opt = optparse.OptionParser()
+
+    opt.add_option('-d', '--debug', action='store_true', dest='debug')
+    opt.add_option('-e', '--errors', action='store_true', dest='error')
+
+    opt.add_option('-t', '--threaded', action='store_false',
+                   default=True, dest='use_gevent')
+
+    opt.add_option('-H', '--host', default='127.0.0.1',
+                   dest='host', help='host to listen on')
+
+    opt.add_option('-m', '--max-clients', default=1024,
+                   dest='max_clients', help='maximum number of clients', type=int)
+
+    opt.add_option('-p', '--port', default=33737, dest='port',
+                   help='port to listen on', type=int)
+
+    opt.add_option('-l', '--log-file', dest='log_file')
+    opt.add_option('-x', '--extension', action='append', dest='extensions',
+                   help="import path for Python extension module(s)")
+
+    return opt
