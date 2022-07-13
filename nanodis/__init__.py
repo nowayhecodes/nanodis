@@ -13,6 +13,7 @@ except ImportError:
     Pool = StreamServer = None
     HAVE_GEVENT = False
 
+from ast import arg
 from collections import deque, namedtuple
 from functools import wraps
 from io import BytesIO
@@ -1018,3 +1019,46 @@ class SocketPool(object):
                 pass
             return True
         return False
+
+
+class Client(object):
+    def __init__(self, host='127.0.0.1', port=33738, pool_max_age=60) -> None:
+        self._host = host
+        self._port = port
+        self._socket_pool = SocketPool(host, port, pool_max_age)
+        self._protocol = ProtocolHandler()
+
+    def execute(self, *args):
+        conn = self._socket_pool.checkout()
+        close_conn = args[0] in (b'QUIT', b'SHUTDOWN')
+        self._protocol.write_response(conn, args)
+
+        try:
+            resp = self._protocol.handle_request(conn)
+
+        except EOFError:
+            self._socket_pool.close()
+            raise ServerDisconnect('server went away')
+
+        except Exception:
+            self._socket_pool.close()
+            raise ServerInternalError('internal server error')
+
+        else:
+            if close_conn:
+                self._socket_pool.close()
+            else:
+                self._socket_pool.checkin()
+
+        if isinstance(resp, Error):
+            raise CmdError(resp.message)
+
+        return resp
+
+    def close(self):
+        self.execute(b'QUIT')
+
+    def command(cmd):
+        def method(self, *args):
+            return self.execute(cmd.encode('utf-8'), *args)
+        return method
