@@ -832,7 +832,43 @@ class QueueServer(object):
             self.check_datatype(SET, key)
             src |= self._kv[key].value
         self.check_datatype(SET, dest)
-        self._kv[dest] =Value(SET, src)
+        self._kv[dest] = Value(SET, src)
         return len(src)
 
+    def schedule_add(self, timestamp, data):
+        dt = self._decode_timestamp(timestamp)
+        heapq.heappush(self._schedule, (dt, data))
+        return 1
+
+    def schedule_read(self, timestamp=None):
+        dt = self._decode_timestamp(timestamp)
+        accum = []
+        while self._schedule and self._schedule[0][0] <= dt:
+            ts, data = heapq.heappop(self._schedule)
+            accum.append(data)
+        return accum
+
+    def schedule_flush(self):
+        schedlen = self.schedule_len()
+        self._schedule = []
+        return schedlen
+
+    def schedule_len(self):
+        return len(self._schedule)
+
+    def info(self):
+        return {
+            'active_connections': self._active_connections,
+            'commands_processed': self._commands_processed,
+            'command_errors': self._command_errors,
+            'connections': self._connections,
+            'keys': len(self._kv),
+            'timestamp': time.time()
+        }
+
+    def flush_all(self):
+        self.kv_flush()
+        self.schedule_flush()
+        return 1
+    
     
