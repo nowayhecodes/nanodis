@@ -14,6 +14,7 @@ numba = "^0.55.2"
 [tool.poetry.dev-dependencies]
 autopep8 = "^1.6.0"
 sure = "^2.0.0"
+auto-changelog = "^0.5.3"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
