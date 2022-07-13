@@ -870,5 +870,85 @@ class QueueServer(object):
         self.kv_flush()
         self.schedule_flush()
         return 1
-    
-    
+
+    def add_command(self, cmd, callback):
+        if isinstance(cmd, unicode):
+            cmd = cmd.encode('utf-8')
+        self._commands[cmd] = callback
+
+    def client_quit(self):
+        raise ClientQuit('client closed the connection')
+
+    def shutdown(self):
+        raise Shutdown('shuttin down')
+
+    def run(self):
+        self._server.serve_forever()
+
+    def connection_handler(self, conn, address):
+        logger.info(f'connection received: {address}')
+        socket_file = conn.makefile('rwb')
+        self._active_connections += 1
+
+        while True:
+            try:
+                self.request_response(socket_file)
+            except EOFError:
+                logger.info(f'client went away: {address}')
+                socket_file.close()
+                break
+
+            except ClientQuit:
+                logger.info(f'Client exited: {address}')
+                break
+
+            except Exception as ex:
+                logger.exception('Error processing command.')
+
+        self._active_connections -= 1
+
+    def request_response(self, socket_file):
+        data = self._protocol.handle_request(socket_file)
+
+        try:
+            resp = self.respond(data)
+        except Shutdown:
+            logger.info('shutting down')
+            self._protocol.write_response(socket_file, 1)
+            raise KeyboardInterrupt
+
+        except ClientQuit:
+            self._protocol.write_response(socket_file, 1)
+            raise
+
+        except CmdError as cmd_error:
+            resp = Error(cmd_error.message)
+            self._command_errors += 1
+
+        except Exception as ex:
+            logger.exception('unhandled error')
+            resp = Error('unhandled server error')
+
+        else:
+            self._commands_processed += 1
+
+        self._protocol.write_response(socket_file, resp)
+
+    def respond(self, data):
+        if not isinstance(data, list):
+            try:
+                data = data.split()
+            except:
+                raise CmdError('unrecognized request type')
+
+        if not isinstance(data[0], basestr):
+            raise CmdError('First parameter must be a command name')
+
+        cmd = data[0].upper()
+
+        if cmd not in self._commands:
+            raise CmdError(f'unrecognized command {cmd}')
+        else:
+            logger.debug(f'received {decode(cmd)}')
+
+        return self._commands[cmd](*data[1:])
