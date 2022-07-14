@@ -31,7 +31,7 @@ import time
 from typing import List, Set
 
 
-from exceptions import ClientQuit, Shutdown, CmdError
+from nanodis.exceptions import ClientQuit, Shutdown, CmdError
 
 try:
     from threading import get_ident as get_ident_threaded

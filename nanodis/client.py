@@ -1,7 +1,7 @@
 from collections import namedtuple
 
 from nanodis import ProtocolHandler, SocketPool
-from exceptions import ServerDisconnect, ServerInternalError, CmdError
+from nanodis.exceptions import ServerDisconnect, ServerInternalError, CmdError
 
 Error = namedtuple('Error', ('message', ))
 
