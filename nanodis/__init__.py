@@ -13,7 +13,6 @@ except ImportError:
     Pool = StreamServer = None
     HAVE_GEVENT = False
 
-from ast import arg
 from collections import deque, namedtuple
 from functools import wraps
 from io import BytesIO
@@ -32,8 +31,7 @@ import time
 from typing import List, Set
 
 
-from exceptions import (ClientQuit, Shutdown,
-                        ServerDisconnect, ServerError, ServerInternalError)
+from exceptions import ClientQuit, Shutdown, CmdError
 
 try:
     from threading import get_ident as get_ident_threaded
@@ -66,12 +64,6 @@ class ThreadedStreamServer(object):
 
     def stop(self):
         self.stream_server.shutdown()
-
-
-class CmdError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super(CmdError, self).__init__()
 
 
 if sys.version_info[0] == 3:
