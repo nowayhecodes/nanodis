@@ -26,30 +26,26 @@ import logging
 import optparse
 import os
 import pickle
+import socketserver as skt_server
 import sys
 import time
 from typing import List, Set
 
 
-from .exceptions import (ClientQuit, Shutdown,
-                         ServerDisconnect, ServerError, ServerInternalError)
+from exceptions import (ClientQuit, Shutdown,
+                        ServerDisconnect, ServerError, ServerInternalError)
 
 try:
     from threading import get_ident as get_ident_threaded
 except ImportError:
-    from thread import get_ident as get_ident_threaded
+    from _thread import get_ident as get_ident_threaded
 
-try:
-    import socketserver as skt_server
-except ImportError:
-    import SocketServer as skt_server
 
-__version__ = '0.1.0'
+__version__ = '1.0.0'
 
 logger = logging.getLogger(__name__)
 
 
-@njit(parallel=True)
 class ThreadedStreamServer(object):
     def __init__(self, address, handler) -> None:
         self.address = address
@@ -104,7 +100,6 @@ def decode(s):
 Error = namedtuple('Error', ('message', ))
 
 
-@njit(parallel=True)
 class ProtocolHandler(object):
     def __init__(self) -> None:
         self.handlers = {
@@ -225,7 +220,6 @@ QUEUE = 2
 SET = 3
 
 
-@njit(parallel=True)
 class QueueServer(object):
     def __init__(self, host='127.0.0.1',
                  port=33737, max_clients=1024, use_gevent=True) -> None:
@@ -361,13 +355,13 @@ class QueueServer(object):
             (b'LRANGE', self.lrange),
             (b'LSET', self.lset),
             (b'LTRIM', self.ltrim),
-            (b'RPOPLPUSH', self.rpopl_plush),
+            (b'RPOPLPUSH', self.rpop_lpush),
             (b'LFLUSH', self.lflush),
 
             # KV cmds
             (b'APPEND', self.kv_append),
             (b'DECR', self.kv_decr),
-            (b'DECRBY', self.kv_decrby),
+            # (b'DECRBY', self.kv_decrby),
             (b'DELETE', self.kv_delete),
             (b'EXISTS', self.kv_exists),
             (b'GET', self.kv_get),
@@ -418,14 +412,14 @@ class QueueServer(object):
             (b'ADD', self.schedule_add),
             (b'READ', self.schedule_read),
             (b'FLUSH_SCHEDULE', self.schedule_flush),
-            (b'LENGTH_SCHEDULE', self.schedule_length),
+            (b'LENGTH_SCHEDULE', self.schedule_len),
 
             # Misc.
             (b'EXPIRE', self.expire),
             (b'INFO', self.info),
             (b'FLUSHALL', self.flush_all),
             (b'SAVE', self.save_to_disk),
-            (b'RESTORE', self.restore_from_disk),
+            (b'RESTORE', self.load_from_disk),
             (b'MERGE', self.merge_from_disk),
             (b'QUIT', self.client_quit),
             (b'SHUTDOWN', self.shutdown),
@@ -788,11 +782,11 @@ class QueueServer(object):
         return len(src)
 
     @enforce_datatype(SET)
-    def sismenber(self, key, member) -> bool:
+    def sismember(self, key, member) -> bool:
         return 1 if member in self._kv[key].value else 0
 
     @enforce_datatype(SET)
-    def smembers(self, key) -> Set(Value):
+    def smembers(self, key) -> Set:
         return self._kv[key].value
 
     @enforce_datatype(SET)
@@ -818,7 +812,7 @@ class QueueServer(object):
         return count
 
     @enforce_datatype(SET)
-    def sunion(self, key, *keys) -> List(Set):
+    def sunion(self, key, *keys) -> List:
         src = set(self._kv[key].value)
         for key in keys:
             self.check_datatype(SET, key)
@@ -954,7 +948,6 @@ class QueueServer(object):
         return self._commands[cmd](*data[1:])
 
 
-@njit
 class SocketPool(object):
     def __init__(self, host, port, max_age=60) -> None:
         self.host = host
@@ -1178,3 +1171,67 @@ def get_opt_parser():
                    help="import path for Python extension module(s)")
 
     return opt
+
+
+def setup_logger(options):
+    logger.addHandler(logging.StreamHandler())
+
+    if options.log_file:
+        logger.addHandler(logging.FileHandler(options.log_file))
+
+    if options.debug:
+        logger.setLevel(logging.DEBUG)
+
+    elif options.error:
+        logger.setLevel(logging.ERROR)
+
+    else:
+        logger.setLevel(logging.INFO)
+
+
+def load_extensions(server, extensions):
+    for ext in extensions:
+        try:
+            module = importlib.import_module(ext)
+        except ImportError:
+            logger.exception(f'could not import extension {ext}')
+
+        else:
+            try:
+                initialize = getattr(module, 'initialize')
+            except AttributeError:
+                logger.exception(
+                    f'could not find "initialize" function in extension {ext}')
+                raise
+
+            else:
+                initialize(server)
+                logger.info(f'loaded extension {ext}')
+
+
+if __name__ == '__main__':
+    options, args = get_opt_parser().parse_args()
+
+    if options.use_gevent:
+        try:
+            from gevent import monkey
+            monkey.patch_all()
+        except ImportError:
+            logger.error('gevent is not installed')
+            sys.stderr.write(
+                f'gevent is not installed. To run using threads specify the -t parameter')
+            sys.stderr.flush()
+            sys.exit(1)
+
+        setup_logger(options)
+
+        server = QueueServer(host=options.host, port=options.port,
+                             max_clients=options.max_clients, use_gevent=options.use_gevent)
+
+        load_extensions(server, options.extensions or ())
+        print(f'Nanodis {(options.host, options.port)}')
+
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            print(f'shutting down')
